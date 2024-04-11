@@ -4,6 +4,9 @@
 #include "crow_all.h"
 #include "json.hpp"
 #include <random>
+#include <thread>
+#include <condition_variable>
+#include <mutex>
 
 static const uint32_t NUM_ROWS = 15;
 
@@ -65,6 +68,42 @@ namespace nlohmann
 // Grid that contains the entities
 static std::vector<std::vector<entity_t>> entity_grid;
 
+std::random_device rd;
+std::mt19937 gen(rd());
+std::uniform_int_distribution<> dis(0, NUM_ROWS);
+
+std::atomic<int> completion_counter = 0;
+std::atomic<int> thread_counter = 0;
+
+std::mutex exec_it_mtx;
+std::condition_variable executa_iteracao;
+
+void plant_routine(entity_t& plant) {
+    while(plant.energy > 0) {
+
+        if(plant.age == 10) plant.energy = 0;
+    }
+
+}
+
+void herbi_routine(entity_t& herbi) {
+    while(herbi.energy > 0) {
+
+        if(herbi.age == 50) herbi.energy = 0;
+    }
+    
+}
+
+void carni_routine(entity_t& carni) {
+       while(carni.energy > 0) {
+
+        if(carni.age == 80) carni.energy = 0;
+    }
+
+}
+
+
+
 int main()
 {
     crow::SimpleApp app;
@@ -83,8 +122,12 @@ int main()
         // Parse the JSON request body
         nlohmann::json request_body = nlohmann::json::parse(req.body);
 
-       // Validate the request body 
-        uint32_t total_entinties = (uint32_t)request_body["plants"] + (uint32_t)request_body["herbivores"] + (uint32_t)request_body["carnivores"];
+       // Validate the request body
+        uint32_t num_plant = request_body["plants"],
+                 num_herbi = request_body["herbivores"],
+                 num_carni = request_body["carnivores"];
+
+        uint32_t total_entinties = num_plant + num_herbi + num_carni;
         if (total_entinties > NUM_ROWS * NUM_ROWS) {
         res.code = 400;
         res.body = "Too many entities";
@@ -97,7 +140,31 @@ int main()
         entity_grid.assign(NUM_ROWS, std::vector<entity_t>(NUM_ROWS, { empty, 0, 0}));
         
         // Create the entities
-        // <YOUR CODE HERE>
+        pos_t creation_pos;
+
+        for(size_t idx = 0; idx != num_plant; idx ++) {
+            creation_pos.i = dis(gen);
+            creation_pos.j = dis(gen);
+            entity_grid[creation_pos.i][creation_pos.j] = {plant, 100, 0};
+            std::thread t(plant_routine, entity_grid[creation_pos.i][creation_pos.j]);
+            thread_counter ++;
+        }
+
+        for(size_t idx = 0; idx != num_herbi; idx ++) {
+            creation_pos.i = dis(gen);
+            creation_pos.j = dis(gen);
+            entity_grid[creation_pos.i][creation_pos.j] = {herbivore, 100, 0};
+            std::thread t(herbi_routine, entity_grid[creation_pos.i][creation_pos.j]);
+            thread_counter ++;
+        }
+
+        for(size_t idx = 0; idx != num_carni; idx ++) {
+            creation_pos.i = dis(gen);
+            creation_pos.j = dis(gen);
+            entity_grid[creation_pos.i][creation_pos.j] = {carnivore, 100, 0};
+            std::thread t(carni_routine, entity_grid[creation_pos.i][creation_pos.j]);
+            thread_counter ++;
+        }
 
         // Return the JSON representation of the entity grid
         nlohmann::json json_grid = entity_grid; 
@@ -111,7 +178,9 @@ int main()
         // Simulate the next iteration
         // Iterate over the entity grid and simulate the behaviour of each entity
         
-        // <YOUR CODE HERE>
+        completion_counter = 0;
+        executa_iteracao.notify_all();
+        while(completion_counter < thread_counter);
         
         // Return the JSON representation of the entity grid
         nlohmann::json json_grid = entity_grid; 
