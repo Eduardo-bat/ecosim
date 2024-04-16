@@ -17,6 +17,12 @@ const uint32_t HERBIVORE_MAXIMUM_AGE = 50;
 const uint32_t CARNIVORE_MAXIMUM_AGE = 80;
 const uint32_t MAXIMUM_ENERGY = 200;
 const uint32_t THRESHOLD_ENERGY_FOR_REPRODUCTION = 20;
+const uint32_t MOVE_ENERGY = 5;
+const uint32_t CARNIVORE_ENERGY_GAIN = 20;
+const uint32_t HERBIVORE_ENERGY_GAIN = 30;
+const uint32_t REPRODUCTION_ENERGY = 10;
+const uint32_t START_ENERGY = 100;
+
 
 // Probabilities
 const double PLANT_REPRODUCTION_PROBABILITY = 0.2;
@@ -73,7 +79,6 @@ std::default_random_engine gen;
 std::uniform_int_distribution<> rand_pos(0, NUM_ROWS);
 std::uniform_real_distribution<> mp_rand(0.0, 1.0);
 
-std::atomic<int> completion_counter = 0;
 std::atomic<int> thread_counter = 0;
 
 std::mutex exec_it_mtx;
@@ -85,9 +90,35 @@ void plant_routine(pos_t pos) {
     while(true) {
         (*sync_it).arrive_and_wait();
         std::unique_lock lk(exec_it_mtx);
-        if(plant.age == 10) {
+        if(plant.type == empty or plant.age == PLANT_MAXIMUM_AGE) {
             thread_counter --;
+            entity_grid[pos.i][pos.j] = {empty, 0, 0};
             return;
+        }
+
+        std::vector<pos_t> empty_pos;
+        for(const pos_t& pos_to_verify : {pos_t(pos.i, pos.j+1), pos_t(pos.i,pos.j-1), pos_t(pos.i+1,pos.j), pos_t(pos.i-1,pos.j)}) {
+
+            if(!(pos_to_verify.i >= 0 and pos_to_verify.i < NUM_ROWS and pos_to_verify.j >= 0 and pos_to_verify.j < NUM_ROWS)) {
+				continue;
+            }
+            
+            if(entity_grid[pos_to_verify.i][pos_to_verify.j].type == empty)
+                empty_pos.push_back(pos_to_verify);
+        }
+
+
+        if(mp_rand(gen) < PLANT_REPRODUCTION_PROBABILITY) {
+
+            size_t idx = mp_rand(gen) * empty_pos.size();
+            std::vector<pos_t>::iterator idx_it = empty_pos.begin() + idx;
+
+            pos_t child_pos = empty_pos[idx];
+
+            entity_grid[child_pos.i][child_pos.j] = {entity_type_t::plant, 0, 0};
+            std::thread t(plant_routine, child_pos);
+            t.detach();
+            thread_counter ++;
         }
         
         plant.age ++;
@@ -100,9 +131,52 @@ void herbi_routine(pos_t pos) {
     while(true) {
         (*sync_it).arrive_and_wait();
         std::unique_lock lk(exec_it_mtx);
-        if(herbi.energy == 0 or herbi.age == 50) {
+        if(herbi.type == empty or herbi.energy == 0 or herbi.age == HERBIVORE_MAXIMUM_AGE) {
             thread_counter --;
+            entity_grid[pos.i][pos.j] = {empty, 0, 0};
             return;
+        }
+
+        std::vector<pos_t> empty_pos;
+        for(const pos_t& pos_to_verify : {pos_t(pos.i, pos.j+1), pos_t(pos.i,pos.j-1), pos_t(pos.i+1,pos.j), pos_t(pos.i-1,pos.j)}) {
+
+            if(!(pos_to_verify.i >= 0 and pos_to_verify.i < NUM_ROWS and pos_to_verify.j >= 0 and pos_to_verify.j < NUM_ROWS)) {
+				continue;
+            }
+
+            if(entity_grid[pos_to_verify.i][pos_to_verify.j].type == plant and mp_rand(gen) < HERBIVORE_EAT_PROBABILITY) {
+                entity_grid[pos_to_verify.i][pos_to_verify.j] = {empty, 0, 0};
+                herbi.energy += HERBIVORE_ENERGY_GAIN;
+            }
+            
+            if(entity_grid[pos_to_verify.i][pos_to_verify.j].type == empty)
+                empty_pos.push_back(pos_to_verify);
+        }
+
+        if(mp_rand(gen) < HERBIVORE_REPRODUCTION_PROBABILITY and herbi.energy > THRESHOLD_ENERGY_FOR_REPRODUCTION) {
+
+            size_t idx = mp_rand(gen) * empty_pos.size();
+            std::vector<pos_t>::iterator idx_it = empty_pos.begin() + idx;
+
+            pos_t child_pos = empty_pos[idx];
+
+            entity_grid[child_pos.i][child_pos.j] = {entity_type_t::herbivore, START_ENERGY, 0};
+            std::thread t(herbi_routine, child_pos);
+            t.detach();
+            thread_counter ++;
+
+            empty_pos.erase(idx_it);
+
+            herbi.energy -= REPRODUCTION_ENERGY;
+        }
+
+        if(mp_rand(gen) < HERBIVORE_MOVE_PROBABILITY) {
+
+            size_t idx = mp_rand(gen) * empty_pos.size();
+
+            entity_grid[pos.i][pos.j] = {empty, 0, 0};
+            pos = empty_pos[idx];
+            herbi.energy -= MOVE_ENERGY;
         }
 
         herbi.age ++;
@@ -114,14 +188,56 @@ void carni_routine(pos_t pos) {
     entity_t& carni = entity_grid[pos.i][pos.j];
 
     while(true) {
+
         (*sync_it).arrive_and_wait();
         std::unique_lock lk(exec_it_mtx);
-        if(carni.energy == 0 or carni.age == 80) {
+        if(carni.type == empty or carni.energy == 0 or carni.age == CARNIVORE_MAXIMUM_AGE) {
             thread_counter --;
+            entity_grid[pos.i][pos.j] = {empty, 0, 0};
             return;
         }
 
-        
+        std::vector<pos_t> empty_pos;
+        for(const pos_t& pos_to_verify : {pos_t(pos.i, pos.j+1), pos_t(pos.i,pos.j-1), pos_t(pos.i+1,pos.j), pos_t(pos.i-1,pos.j)}) {
+
+            if(!(pos_to_verify.i >= 0 and pos_to_verify.i < NUM_ROWS and pos_to_verify.j >= 0 and pos_to_verify.j < NUM_ROWS)) {
+				continue;
+            }
+
+            if(entity_grid[pos_to_verify.i][pos_to_verify.j].type == herbivore and mp_rand(gen) < CARNIVORE_EAT_PROBABILITY) {
+                entity_grid[pos_to_verify.i][pos_to_verify.j] = {empty, 0, 0};
+                carni.energy += CARNIVORE_ENERGY_GAIN;
+            }
+            
+            if(entity_grid[pos_to_verify.i][pos_to_verify.j].type == empty)
+                empty_pos.push_back(pos_to_verify);
+        }
+
+        if(mp_rand(gen) < CARNIVORE_REPRODUCTION_PROBABILITY and carni.energy > THRESHOLD_ENERGY_FOR_REPRODUCTION) {
+
+            size_t idx = mp_rand(gen) * empty_pos.size();
+            std::vector<pos_t>::iterator idx_it = empty_pos.begin() + idx;
+
+            pos_t child_pos = empty_pos[idx];
+
+            entity_grid[child_pos.i][child_pos.j] = {entity_type_t::carnivore, START_ENERGY, 0};
+            std::thread t(carni_routine, child_pos);
+            t.detach();
+            thread_counter ++;
+
+            empty_pos.erase(idx_it);
+
+            carni.energy -= REPRODUCTION_ENERGY;
+        }
+
+        if(mp_rand(gen) < CARNIVORE_MOVE_PROBABILITY) {
+
+            size_t idx = mp_rand(gen) * empty_pos.size();
+
+            entity_grid[pos.i][pos.j] = {empty, 0, 0};
+            pos = empty_pos[idx];
+            carni.energy -= MOVE_ENERGY;
+        }
 
         carni.age ++;
     }
@@ -169,7 +285,7 @@ int main()
         for(size_t idx = 0; idx != num_plant; idx ++) {
             creation_pos.i = rand_pos(gen);
             creation_pos.j = rand_pos(gen);
-            entity_grid[creation_pos.i][creation_pos.j] = {plant, 100, 0};
+            entity_grid[creation_pos.i][creation_pos.j] = {plant, START_ENERGY, 0};
             std::thread t(plant_routine, creation_pos);
             t.detach();
             thread_counter ++;
@@ -178,7 +294,7 @@ int main()
         for(size_t idx = 0; idx != num_herbi; idx ++) {
             creation_pos.i = rand_pos(gen);
             creation_pos.j = rand_pos(gen);
-            entity_grid[creation_pos.i][creation_pos.j] = {herbivore, 100, 0};
+            entity_grid[creation_pos.i][creation_pos.j] = {herbivore, START_ENERGY, 0};
             std::thread t(herbi_routine, creation_pos);
             t.detach();
             thread_counter ++;
