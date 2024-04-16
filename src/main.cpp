@@ -7,6 +7,7 @@
 #include <thread>
 #include <condition_variable>
 #include <mutex>
+#include <latch>
 
 static const uint32_t NUM_ROWS = 15;
 
@@ -68,41 +69,64 @@ namespace nlohmann
 // Grid that contains the entities
 static std::vector<std::vector<entity_t>> entity_grid;
 
-std::random_device rd;
-std::mt19937 gen(rd());
-std::uniform_int_distribution<> dis(0, NUM_ROWS);
+std::default_random_engine gen;
+std::uniform_int_distribution<> rand_pos(0, NUM_ROWS);
+std::uniform_real_distribution<> mp_rand(0.0, 1.0);
 
 std::atomic<int> completion_counter = 0;
 std::atomic<int> thread_counter = 0;
 
 std::mutex exec_it_mtx;
-std::condition_variable executa_iteracao;
+std::latch *sync_it;
 
-void plant_routine(entity_t& plant) {
-    while(plant.energy > 0) {
+void plant_routine(pos_t pos) {
+    entity_t& plant = entity_grid[pos.i][pos.j];
 
-        if(plant.age == 10) plant.energy = 0;
+    while(true) {
+        (*sync_it).arrive_and_wait();
+        std::unique_lock lk(exec_it_mtx);
+        if(plant.age == 10) {
+            thread_counter --;
+            return;
+        }
+        
+        plant.age ++;
     }
-
 }
 
-void herbi_routine(entity_t& herbi) {
-    while(herbi.energy > 0) {
+void herbi_routine(pos_t pos) {
+    entity_t& herbi = entity_grid[pos.i][pos.j];
 
-        if(herbi.age == 50) herbi.energy = 0;
+    while(true) {
+        (*sync_it).arrive_and_wait();
+        std::unique_lock lk(exec_it_mtx);
+        if(herbi.energy == 0 or herbi.age == 50) {
+            thread_counter --;
+            return;
+        }
+
+        herbi.age ++;
     }
     
 }
 
-void carni_routine(entity_t& carni) {
-       while(carni.energy > 0) {
+void carni_routine(pos_t pos) {
+    entity_t& carni = entity_grid[pos.i][pos.j];
 
-        if(carni.age == 80) carni.energy = 0;
+    while(true) {
+        (*sync_it).arrive_and_wait();
+        std::unique_lock lk(exec_it_mtx);
+        if(carni.energy == 0 or carni.age == 80) {
+            thread_counter --;
+            return;
+        }
+
+        
+
+        carni.age ++;
     }
 
 }
-
-
 
 int main()
 {
@@ -143,26 +167,29 @@ int main()
         pos_t creation_pos;
 
         for(size_t idx = 0; idx != num_plant; idx ++) {
-            creation_pos.i = dis(gen);
-            creation_pos.j = dis(gen);
+            creation_pos.i = rand_pos(gen);
+            creation_pos.j = rand_pos(gen);
             entity_grid[creation_pos.i][creation_pos.j] = {plant, 100, 0};
-            std::thread t(plant_routine, entity_grid[creation_pos.i][creation_pos.j]);
+            std::thread t(plant_routine, creation_pos);
+            t.detach();
             thread_counter ++;
         }
 
         for(size_t idx = 0; idx != num_herbi; idx ++) {
-            creation_pos.i = dis(gen);
-            creation_pos.j = dis(gen);
+            creation_pos.i = rand_pos(gen);
+            creation_pos.j = rand_pos(gen);
             entity_grid[creation_pos.i][creation_pos.j] = {herbivore, 100, 0};
-            std::thread t(herbi_routine, entity_grid[creation_pos.i][creation_pos.j]);
+            std::thread t(herbi_routine, creation_pos);
+            t.detach();
             thread_counter ++;
         }
 
         for(size_t idx = 0; idx != num_carni; idx ++) {
-            creation_pos.i = dis(gen);
-            creation_pos.j = dis(gen);
+            creation_pos.i = rand_pos(gen);
+            creation_pos.j = rand_pos(gen);
             entity_grid[creation_pos.i][creation_pos.j] = {carnivore, 100, 0};
-            std::thread t(carni_routine, entity_grid[creation_pos.i][creation_pos.j]);
+            std::thread t(carni_routine, creation_pos);
+            t.detach();
             thread_counter ++;
         }
 
@@ -178,9 +205,9 @@ int main()
         // Simulate the next iteration
         // Iterate over the entity grid and simulate the behaviour of each entity
         
-        completion_counter = 0;
-        executa_iteracao.notify_all();
-        while(completion_counter < thread_counter);
+        std::latch lt(thread_counter);
+        sync_it = &lt;
+        (*sync_it).wait();
         
         // Return the JSON representation of the entity grid
         nlohmann::json json_grid = entity_grid; 
