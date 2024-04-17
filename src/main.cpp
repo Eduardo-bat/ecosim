@@ -45,6 +45,10 @@ struct pos_t
 {
     uint32_t i;
     uint32_t j;
+
+	pos_t(int i, int j) : i(i), j(j) {};
+	pos_t() {};
+    
 };
 
 struct entity_t
@@ -75,7 +79,7 @@ namespace nlohmann
 static std::vector<std::vector<entity_t>> entity_grid;
 
 std::default_random_engine gen;
-std::uniform_int_distribution<> rand_pos(0, NUM_ROWS);
+std::uniform_int_distribution<> rand_pos(0, NUM_ROWS - 1);
 std::uniform_real_distribution<> mp_rand(0.0, 1.0);
 
 std::atomic<int> thread_counter = 0;
