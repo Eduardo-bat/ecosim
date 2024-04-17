@@ -7,7 +7,6 @@
 #include <thread>
 #include <condition_variable>
 #include <mutex>
-#include <latch>
 
 static const uint32_t NUM_ROWS = 15;
 
@@ -80,16 +79,26 @@ std::uniform_int_distribution<> rand_pos(0, NUM_ROWS);
 std::uniform_real_distribution<> mp_rand(0.0, 1.0);
 
 std::atomic<int> thread_counter = 0;
+std::atomic<int> completion_counter = 0;
+std::atomic<int> current_it = 0;
 
 std::mutex exec_it_mtx;
-std::latch *sync_it;
+std::condition_variable exec_it;
+
+bool new_it(int my_it) {
+    return my_it != (current_it + 1);
+}
 
 void plant_routine(pos_t pos) {
     entity_t& plant = entity_grid[pos.i][pos.j];
+    int my_it = current_it;
 
     while(true) {
-        (*sync_it).arrive_and_wait();
+
         std::unique_lock lk(exec_it_mtx);
+        while(!new_it(my_it)) exec_it.wait(lk);
+        my_it ++;
+
         if(plant.type == empty or plant.age == PLANT_MAXIMUM_AGE) {
             thread_counter --;
             entity_grid[pos.i][pos.j] = {empty, 0, 0};
@@ -122,15 +131,20 @@ void plant_routine(pos_t pos) {
         }
         
         plant.age ++;
+        completion_counter ++;
     }
 }
 
 void herbi_routine(pos_t pos) {
     entity_t& herbi = entity_grid[pos.i][pos.j];
+    int my_it = current_it;
 
     while(true) {
-        (*sync_it).arrive_and_wait();
+
         std::unique_lock lk(exec_it_mtx);
+        while(!new_it(my_it)) exec_it.wait(lk);
+        my_it ++;
+
         if(herbi.type == empty or herbi.energy == 0 or herbi.age == HERBIVORE_MAXIMUM_AGE) {
             thread_counter --;
             entity_grid[pos.i][pos.j] = {empty, 0, 0};
@@ -180,17 +194,22 @@ void herbi_routine(pos_t pos) {
         }
 
         herbi.age ++;
+        completion_counter ++;
     }
     
 }
 
 void carni_routine(pos_t pos) {
+
     entity_t& carni = entity_grid[pos.i][pos.j];
+    int my_it = current_it;
 
     while(true) {
 
-        (*sync_it).arrive_and_wait();
         std::unique_lock lk(exec_it_mtx);
+        while(!new_it(my_it)) exec_it.wait(lk);
+        my_it ++;
+
         if(carni.type == empty or carni.energy == 0 or carni.age == CARNIVORE_MAXIMUM_AGE) {
             thread_counter --;
             entity_grid[pos.i][pos.j] = {empty, 0, 0};
@@ -240,6 +259,7 @@ void carni_routine(pos_t pos) {
         }
 
         carni.age ++;
+        completion_counter ++;
     }
 
 }
@@ -281,6 +301,9 @@ int main()
         
         // Create the entities
         pos_t creation_pos;
+        thread_counter = 0;
+        completion_counter = 0;
+        current_it = 0;
 
         for(size_t idx = 0; idx != num_plant; idx ++) {
             creation_pos.i = rand_pos(gen);
@@ -321,9 +344,10 @@ int main()
         // Simulate the next iteration
         // Iterate over the entity grid and simulate the behaviour of each entity
         
-        std::latch lt(thread_counter);
-        sync_it = &lt;
-        (*sync_it).wait();
+        current_it ++;
+        completion_counter = 0;
+        exec_it.notify_all();
+        while(completion_counter < thread_counter);
         
         // Return the JSON representation of the entity grid
         nlohmann::json json_grid = entity_grid; 
